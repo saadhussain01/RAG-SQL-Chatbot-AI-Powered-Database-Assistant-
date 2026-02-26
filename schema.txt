@@ -1,0 +1,123 @@
+Database: pet_shop_db
+
+Description:
+Online pet shop system for selling pets and pet accessories.
+Each pet and product has an image and a purchase URL.
+
+==================================================
+
+Table: users
+Columns:
+- id (INT, PK, AUTO_INCREMENT)
+- name (VARCHAR)
+- email (VARCHAR, UNIQUE)
+- phone (VARCHAR)
+- created_at (TIMESTAMP)
+
+--------------------------------------------------
+
+Table: pets
+Columns:
+- id (INT, PK, AUTO_INCREMENT)
+- name (VARCHAR)
+- species (VARCHAR)
+- breed (VARCHAR)
+- age (INT)
+- price (DECIMAL)
+- status (available/sold)
+- image_url (VARCHAR)
+- product_url (VARCHAR)
+
+--------------------------------------------------
+
+Table: products
+Columns:
+- id (INT, PK, AUTO_INCREMENT)
+- name (VARCHAR)
+- category (VARCHAR)
+- description (TEXT)
+- price (DECIMAL)
+- stock (INT)
+- image_url (VARCHAR)
+- product_url (VARCHAR)
+
+--------------------------------------------------
+
+Table: orders
+Columns:
+- id (INT, PK, AUTO_INCREMENT)
+- user_id (INT, FK → users.id)
+- total (DECIMAL)
+- order_date (TIMESTAMP)
+
+--------------------------------------------------
+
+Table: order_items
+Columns:
+- id (INT, PK, AUTO_INCREMENT)
+- order_id (INT, FK → orders.id)
+- product_id (INT, FK → products.id, NULLABLE)
+- pet_id (INT, FK → pets.id, NULLABLE)
+- quantity (INT)
+- price (DECIMAL)
+
+--------------------------------------------------
+
+Table: payments
+Columns:
+- id (INT, PK, AUTO_INCREMENT)
+- order_id (INT, FK → orders.id)
+- amount (DECIMAL)
+- method (cash/card/online)
+- status (pending/completed/failed)
+- payment_date (TIMESTAMP)
+
+==================================================
+
+Relationships:
+
+- users.id → orders.user_id
+- orders.id → order_items.order_id
+- orders.id → payments.order_id
+- pets.id → order_items.pet_id
+- products.id → order_items.product_id
+
+==================================================
+
+Important Rules:
+
+- Pets and products have image_url and product_url.
+- order_items contains either a pet OR a product.
+- Only SELECT queries are allowed.
+- Never modify data.
+
+==================================================
+
+Example Queries:
+
+1. Show all available pets with images
+SELECT name, price, image_url, product_url
+FROM pets
+WHERE status = 'available';
+
+2. Show all products
+SELECT name, price, stock, image_url
+FROM products;
+
+3. Show user orders
+SELECT u.name, o.total, o.order_date
+FROM users u
+JOIN orders o ON u.id = o.user_id;
+
+4. Best customers
+SELECT u.name, SUM(o.total) AS spent
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.id;
+
+5. Low stock products
+SELECT name, stock
+FROM products
+WHERE stock < 10;
+
+==================================================

@@ -1,0 +1,12 @@
+streamlit
+sqlalchemy
+pymysql
+pandas
+python-dotenv
+faiss-cpu
+huggingface-hub
+langchain
+langchain-core
+langchain-community
+langgraph
+sentence-transformers
