@@ -1,97 +1,199 @@
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
-
 import streamlit as st
 from langchain_rag.graph import app_graph
+import pandas as pd
 
-st.set_page_config(page_title="RAG SQL Chatbot", layout="wide")
-st.title("🤖 RAG SQL Chatbot")
+# Page config
+st.set_page_config(page_title="RAG SQL Bot", layout="wide")
 
+st.title("🤖 Pet Store AI Assistant")
+
+# Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Show chat history
+
+# ===============================
+# Display Chat History
+# ===============================
 for msg in st.session_state.messages:
+
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
 
-def show_products(df):
+        if msg["type"] == "text":
+            st.markdown(msg["content"])
 
-    for _, row in df.iterrows():
+        elif msg["type"] == "product":
 
-        col1, col2 = st.columns([1, 3])
+            st.image(msg["image"], width=250)
 
-        # Image (if exists)
-        with col1:
-            if "image_url" in df.columns and row["image_url"]:
-                st.image(row["image_url"], width=150)
-            else:
-                st.image("https://via.placeholder.com/150", width=150)
+            st.markdown(f"### {msg['name']}")
+            st.write(f"💰 Rs {msg['price']}")
+            st.markdown(f"[🔗 View Product]({msg['url']})")
 
-        # Info
-        with col2:
+            st.divider()
 
-            # Name
-            if "name" in df.columns:
-                st.markdown(f"### {row['name']}")
 
-            # Dynamically show fields
-            for col in df.columns:
+# ===============================
+# Show Product Grid (Recommendations)
+# ===============================
+def show_recommendations(data, title):
 
-                if col in ["image_url", "name"]:
-                    continue
+    if not data:
+        return
 
-                value = row[col]
+    st.subheader(title)
 
-                st.write(f"**{col.capitalize()}**: {value}")
+    df = pd.DataFrame(data)
 
-        st.divider()
+    cols = st.columns(3)
 
-# User input
-user_input = st.chat_input("Ask your database...")
+    for i, (_, row) in enumerate(df.iterrows()):
+
+        with cols[i % 3]:
+
+            img = row.get("image_url") or "https://via.placeholder.com/300"
+
+            st.image(img, use_container_width=True)
+
+            st.markdown(f"### {row.get('name','')}")
+
+            if "price" in row:
+                st.write(f"💰 Rs {row['price']}")
+
+            if "product_url" in row:
+                st.markdown(f"[🔗 View Product]({row['product_url']})")
+
+            st.markdown("---")
+
+
+# ===============================
+# Chat Input
+# ===============================
+user_input = st.chat_input("Ask me about pets or products...")
+
 
 if user_input:
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # Show user message
+    st.session_state.messages.append({
+        "role": "user",
+        "type": "text",
+        "content": user_input
+    })
+
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Prepare state
+    # Run LangGraph
     state = {"question": user_input}
 
-    # Initialize response safely
-    response = None
     try:
-        response = app_graph.invoke(state)
-    except RuntimeError as e:
-        if "StopIteration" in str(e):
-            # Generator ended correctly; ignore
-            pass
-        else:
-            st.error(f"Runtime error: {e}")
+        result = app_graph.invoke(state)
+        output = result.get("result", [])
+
     except Exception as e:
-        st.error(f"Unexpected error: {e}")
+        st.error(f"System Error: {e}")
+        st.stop()
 
-    # Safely access response
-    if isinstance(response, dict):
-        sql_output = response.get("sql")
-        df = response.get("result")
-        error = response.get("error")
+
+    # ===============================
+    # CASE 1: Normal Chat Reply
+    # ===============================
+    if isinstance(output, list) and len(output) > 0 and output[0].get("type") == "text":
+
+        reply = output[0]["value"]
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "type": "text",
+            "content": reply
+        })
+
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
+
+    # ===============================
+    # CASE 2: Database Results
+    # ===============================
+    elif isinstance(output, list) and len(output) > 0:
+
+        main_results = []
+        recommendations = []
+
+        # Split main + recommended
+        for i, row in enumerate(output):
+
+            if i < 3:
+                main_results.append(row)
+            else:
+                recommendations.append(row)
+
+
+        # Show Main Results
+        for row in main_results:
+
+            with st.chat_message("assistant"):
+
+                # Image
+                img = row.get("image_url") or "https://via.placeholder.com/300"
+                st.image(img, width=250)
+
+                # Name
+                st.markdown(f"## 🐾 {row.get('name','')}")
+
+                # Details
+                if "species" in row:
+                    st.write(f"**Species:** {row['species']}")
+
+                if "breed" in row:
+                    st.write(f"**Breed:** {row['breed']}")
+
+                if "age" in row:
+                    st.write(f"**Age:** {row['age']} years")
+
+                if "price" in row:
+                    st.write(f"💰 **Price:** Rs {row['price']}")
+
+                if "status" in row:
+                    st.write(f"📌 **Status:** {row['status']}")
+
+                # Product link
+                if "product_url" in row:
+                    st.markdown(f"🔗 [View Product]({row['product_url']})")
+
+                st.divider()
+
+
+        # Save main results to history
+        for row in main_results:
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "type": "product",
+                "name": row.get("name", ""),
+                "price": row.get("price", ""),
+                "image": row.get("image_url"),
+                "url": row.get("product_url")
+            })
+
+
+        # ===============================
+        # Recommendations Section
+        # ===============================
+        if recommendations:
+
+            st.markdown("## ⭐ You May Also Like")
+
+            show_recommendations(
+                recommendations,
+                "Recommended For You"
+            )
+
+
+    # ===============================
+    # CASE 3: No Result
+    # ===============================
     else:
-        st.error("No response from model")
 
-    # Format assistant message
-
-    # st.markdown("### 🧠 Generated SQL")
-    # st.code(sql_output, language="sql")
-
-    if error:
-        st.error(error)
-
-    elif df is not None:
-        show_products(df)
-
-    else:
-        st.warning("No data found.")
+        st.warning("❌ No data found. Try different keywords.")

@@ -1,11 +1,9 @@
 from langgraph.graph import StateGraph, END
-
 from langchain_rag.llm import llm
 from langchain_rag.embeddings import build_vectorstore
 from utils.sql_utils import execute_sql
 
-
-# Build vectorstore once
+# Build vectorstore
 vectorstore = build_vectorstore()
 
 
@@ -13,7 +11,52 @@ class ChatState(dict):
     question: str
     context: str
     sql: str
-    result: str
+    result: list
+    mode: str   # "chat" or "db"
+
+
+# -------------------------
+# Detect Intent
+# -------------------------
+def detect_intent(state):
+
+    q = state["question"].lower()
+
+    greetings = ["hi", "hello", "hey", "how are you"]
+
+    if any(word in q for word in greetings):
+        return {"mode": "chat"}
+
+    return {"mode": "db"}
+
+
+def extract_keyword(question):
+
+    stopwords = ["show", "find", "me", "all", "the", "a", "an", "please"]
+
+    words = question.lower().split()
+
+    keywords = [w for w in words if w not in stopwords]
+
+    return keywords[-1] if keywords else ""
+
+
+# -------------------------
+# Normal Chat
+# -------------------------
+def normal_chat(state):
+
+    prompt = f"""
+You are a friendly chatbot.
+
+User: {state['question']}
+
+Reply naturally. Also encourage user to ask about pets/products.
+"""
+
+    reply = llm.invoke(prompt)
+
+    return {"result": [{"type": "text", "value": reply}]}
 
 
 # -------------------------
@@ -23,13 +66,10 @@ def retrieve_context(state):
 
     docs = vectorstore.similarity_search(
         state["question"],
-        k=1
+        k=2
     )
 
     context = "\n".join(d.page_content for d in docs)
-
-    print("\n=== RETRIEVED CONTEXT ===")
-    print(context)
 
     return {"context": context}
 
@@ -40,79 +80,47 @@ def retrieve_context(state):
 def generate_sql(state):
 
     prompt = f"""
-    You are an expert MySQL database engineer and data analyst.
+You are a professional MySQL expert.
 
-    Your job:
-    Convert the user's natural language question into a valid MySQL SELECT query.
+Database schema:
+{state.get("context","")}
 
-    You must think carefully about:
-    - User intent
-    - Relationships between tables
-    - Required joins
-    - Filters
-    - Aggregations
-    - Sorting
-    - Limits
+Rules:
+- Write only SELECT queries
+- No explanation
+- No markdown
+- Always use LIKE with %
+- Search in: name, category, species, breed
 
-    ==================================================
+User question:
+{state["question"]}
 
-    DATABASE SCHEMA:
+Examples:
 
-    {state["context"]}
+show accessories
+SELECT * FROM products
+WHERE category LIKE '%accessories%';
 
-    ==================================================
+show dog products
+SELECT * FROM products
+WHERE name LIKE '%dog%'
+OR category LIKE '%dog%';
 
-    RULES (VERY IMPORTANT):
+show persian cat
+SELECT * FROM pets
+WHERE breed LIKE '%persian%';
 
-    1. ONLY generate SELECT queries.
-    2. NEVER use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE.
-    3. NEVER explain anything.
-    4. NEVER use markdown.
-    5. Return ONLY pure SQL.
-    6. Always use correct column names.
-    7. Use JOINs when data is in multiple tables.
-    8. If images or links are relevant, include image_url and product_url.
-    9. If user asks for "best", "top", "highest", use ORDER BY + LIMIT.
-    10. If user asks for "cheap", "lowest", use ORDER BY ASC.
-    11. If user asks for "recent", use ORDER BY date DESC.
-    12. If user asks for "total", "sum", use aggregation.
-    13. If user asks something unclear, make the best logical assumption.
+Now write SQL:
 
-    ==================================================
-
-    USER QUESTION:
-    {state["question"]}
-
-    ==================================================
-
-    THINK INTERNALLY ABOUT THE QUERY.
-
-    Then output ONLY the SQL query.
-
-    SQL:
-    """
+SQL:
+"""
 
     sql = llm.invoke(prompt)
 
-    print("=== RAW LLM OUTPUT ===")
+    print("=== GENERATED SQL ===")
     print(sql)
 
-
-    if not sql or len(sql.strip()) < 5:
-        print("❌ Empty SQL from LLM")
-
-        return {
-            "sql": "",
-            "result": "LLM failed to generate SQL"
-        }
-
-    # Safety cleanup
-    sql = sql.strip()
-
-    if not sql.endswith(";"):
-        sql += ";"
-
-    return {"sql": sql}
+    return {"sql": sql.strip()}
 
 
 # -------------------------
@@ -120,28 +128,86 @@ def generate_sql(state):
 # -------------------------
 def run_sql(state):
 
+    question = state.get("question", "").lower()
     sql = state.get("sql", "").strip()
 
-    if not sql:
-        return {"result": None, "error": "No SQL generated."}
+    words = question.split()
+    main_word = words[-1] if words else ""
+
+    if not sql or len(sql) < 10:
+
+        sql = f"""
+        SELECT id, name, price, image_url, product_url
+        FROM pets
+        WHERE
+            name LIKE '%{main_word}%'
+            OR species LIKE '%{main_word}%'
+            OR breed LIKE '%{main_word}%'
+
+        UNION
+
+        SELECT id, name, price, image_url, product_url
+        FROM products
+        WHERE
+            name LIKE '%{main_word}%'
+            OR category LIKE '%{main_word}%'
+        """
 
     df, error = execute_sql(sql)
 
+    if error:
+        return {"error": error}
+
+    # Recommendations
+    rec_sql = f"""
+    SELECT id, name, price, image_url, product_url
+    FROM products
+    ORDER BY RAND()
+    LIMIT 4
+    """
+
+    rec_df, _ = execute_sql(rec_sql)
+
     return {
-        "result": df,
-        "error": error
+        "data": df,
+        "recommendations": rec_df
     }
 
 # -------------------------
-# Graph
+# Router
+# -------------------------
+def router(state):
+
+    if state["mode"] == "chat":
+        return "chat"
+
+    return "db"
+
+
+# -------------------------
+# Build Graph
 # -------------------------
 graph = StateGraph(ChatState)
+
+graph.add_node("intent", detect_intent)
+graph.add_node("chat", normal_chat)
 
 graph.add_node("retrieve", retrieve_context)
 graph.add_node("generate", generate_sql)
 graph.add_node("execute", run_sql)
 
-graph.set_entry_point("retrieve")
+graph.set_entry_point("intent")
+
+graph.add_conditional_edges(
+    "intent",
+    router,
+    {
+        "chat": "chat",
+        "db": "retrieve"
+    }
+)
+
+graph.add_edge("chat", END)
 
 graph.add_edge("retrieve", "generate")
 graph.add_edge("generate", "execute")
